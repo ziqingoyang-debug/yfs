@@ -107,3 +107,59 @@ if uploaded_file is not None:
                 title="Paid vs Non-paid",
                 hole=0.0,
                 color_discrete_sequence=px.colors.qualitative.Set2
+            )
+            fig1.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
+            fig1.update_layout(title_font_size=16)
+            st.plotly_chart(fig1, use_container_width=True)
+
+        # Child chart: Ad channels (only paid)
+        paid_df = df[df["Paid or Non-paid"] == "Paid"].copy()
+        revenue_alloc = {}
+
+        for _, row in paid_df.iterrows():
+            total_rev = float(row["Total revenue"]) if not pd.isna(row["Total revenue"]) else 0
+            m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
+            s1, s2 = row["source1"], row["source2"]
+
+            has_m1 = any(k in m1 for k in paid_keywords)
+            has_m2 = any(k in m2 for k in paid_keywords)
+
+            if has_m1 and has_m2:
+                revenue_alloc[s1] = revenue_alloc.get(s1, 0) + total_rev * 0.5
+                revenue_alloc[s2] = revenue_alloc.get(s2, 0) + total_rev * 0.5
+            elif has_m1 and not has_m2:
+                revenue_alloc[s1] = revenue_alloc.get(s1, 0) + total_rev
+            elif has_m2 and not has_m1:
+                revenue_alloc[s2] = revenue_alloc.get(s2, 0) + total_rev
+
+        if len(revenue_alloc) == 0:
+            st.warning("⚠️ No valid paid channels or revenue = 0.")
+        else:
+            right_df = pd.DataFrame(list(revenue_alloc.items()), columns=["Ad Channel", "Total revenue"])
+            right_df = right_df.sort_values(by="Total revenue", ascending=False)
+
+            with col2:
+                fig2 = px.pie(
+                    right_df,
+                    names="Ad Channel",
+                    values="Total revenue",
+                    title="Ad Channels",
+                    hole=0.0,
+                    color_discrete_sequence=px.colors.qualitative.Pastel
+                )
+                fig2.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
+                fig2.update_layout(title_font_size=16)
+                st.plotly_chart(fig2, use_container_width=True)
+
+        # ---------- 7. Download cleaned CSV ----------
+        output = io.BytesIO()
+        df.to_csv(output, index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="📥 Download cleaned CSV",
+            data=output.getvalue(),
+            file_name="cleaned_data.csv",
+            mime="text/csv",
+        )
+
+    except Exception as e:
+        st.error(f"❌ Error during data processing: {e}")
