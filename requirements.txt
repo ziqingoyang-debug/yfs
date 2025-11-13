@@ -1,0 +1,5 @@
+streamlit
+plotly
+pandas
+openpyxl  
+matplotlib # 用于读取 Excel 文件
