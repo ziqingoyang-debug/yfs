@@ -108,6 +108,9 @@ if uploaded_file is not None:
         st.dataframe(df.head(20))
 
         # ---------- 6. Visualization ----------
+# ============================================================
+# 📈 Revenue Distribution Visualization
+# ============================================================
         st.subheader("📈 Revenue Distribution Visualization")
 
         col1, col2 = st.columns(2)
@@ -168,7 +171,82 @@ if uploaded_file is not None:
                 fig2.update_layout(title_font_size=16)
                 st.plotly_chart(fig2, use_container_width=True)
 
-        # ---------- 7. Download cleaned CSV ----------
+# ============================================================
+# 📈 Purchase Distribution Visualization
+# ============================================================
+st.subheader("📈 Purchase Distribution Visualization")
+
+col3, col4 = st.columns(2)
+
+# ---------- Mother chart: Paid vs Non-paid (Purchases) ----------
+purchase_mother = (
+    df.groupby("Paid or Non-paid")["Purchases"]
+      .sum()
+      .reset_index()
+)
+purchase_mother = purchase_mother[purchase_mother["Paid or Non-paid"] != "Unrecognized"]
+
+with col3:
+    fig3 = px.pie(
+        purchase_mother,
+        names="Paid or Non-paid",
+        values="Purchases",
+        title="Paid vs Non-paid (Purchases)",
+        hole=0.0,
+        color_discrete_sequence=px.colors.qualitative.Set2
+    )
+    fig3.update_traces(
+        textinfo="none",
+        hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}"
+    )
+    fig3.update_layout(title_font_size=16)
+    st.plotly_chart(fig3, use_container_width=True)
+
+# ---------- Child chart: Ad Channels (Purchases, only Paid) ----------
+paid_purchase_df = df[df["Paid or Non-paid"] == "Paid"].copy()
+purchase_alloc = {}
+
+for _, row in paid_purchase_df.iterrows():
+    total_pur = int(row["Purchases"]) if not pd.isna(row["Purchases"]) else 0
+    m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
+    s1, s2 = row["source1"], row["source2"]
+
+    has_m1 = any(k in m1 for k in paid_keywords)
+    has_m2 = any(k in m2 for k in paid_keywords)
+
+    if has_m1 and has_m2:
+        purchase_alloc[s1] = purchase_alloc.get(s1, 0) + total_pur * 0.5
+        purchase_alloc[s2] = purchase_alloc.get(s2, 0) + total_pur * 0.5
+    elif has_m1 and not has_m2:
+        purchase_alloc[s1] = purchase_alloc.get(s1, 0) + total_pur
+    elif has_m2 and not has_m1:
+        purchase_alloc[s2] = purchase_alloc.get(s2, 0) + total_pur
+
+with col4:
+    if len(purchase_alloc) == 0:
+        st.warning("⚠️ No valid paid channels or purchases = 0.")
+    else:
+        purchase_channel_df = pd.DataFrame(
+            list(purchase_alloc.items()),
+            columns=["Ad Channel", "Purchases"]
+        ).sort_values(by="Purchases", ascending=False)
+
+        fig4 = px.pie(
+            purchase_channel_df,
+            names="Ad Channel",
+            values="Purchases",
+            title="Ad Channels (Purchases)",
+            hole=0.0,
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig4.update_traces(
+            textinfo="none",
+            hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}"
+        )
+        fig4.update_layout(title_font_size=16)
+        st.plotly_chart(fig4, use_container_width=True)
+
+# ---------- 7. Download cleaned CSV ----------
         output = io.BytesIO()
         df.to_csv(output, index=False, encoding="utf-8-sig")
         st.download_button(
