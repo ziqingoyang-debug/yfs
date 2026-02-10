@@ -9,6 +9,23 @@ import plotly.express as px
 st.set_page_config(page_title="Custom Attribution Model", layout="wide")
 st.title("📊 Custom Attribution Model")
 
+st.markdown(
+    """
+**使用说明 / Logic Overview**
+
+1. 上传 **GA4 导出的 CSV 文件**
+2. 自动跳过前几行说明，只读取核心数据表
+3. 统一并固定字段名称（Sessions / Revenue 等）
+4. 拆分 `source / medium` 字段
+5. 基于关键词规则，将流量标记为 **Paid / Non-paid**
+6. 左侧图表：**Paid vs Non-paid 的收入占比**
+7. 右侧图表：**Paid 收入按 source 进行归因分摊**
+   - 双付费来源：50% / 50%
+   - 单一付费来源：100%
+8. 支持下载 **清洗后的宽表 CSV**
+"""
+)
+
 uploaded_file = st.file_uploader("Upload original CSV file", type=["csv"])
 
 # ========== 工具函数 ==========
