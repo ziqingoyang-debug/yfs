@@ -13,20 +13,20 @@ st.title("📊 Custom Attribution Model")
 
 st.markdown(
     """
-**使用说明和修改记录 / Logic Overview**
+**使用说明 / Logic Overview**
 
 1. 上传 **GA4 导出的 CSV 文件**
-2. 自动定位表头行并读取核心数据
+2. 自动定位表头行并读取核心数据（✅ 已兼容空行导致的 header 偏移）
 3. 固定字段名称（Sessions / Purchases / Total revenue 等）
 4. 拆分 `source / medium`
 5. 基于关键词规则标记 **Paid / Non-paid**
 6. 可视化（保留原有两块）：
    - Revenue：Paid vs Non-paid；Paid 内 Ad Channels
-   - 20260210 新增 Purchases：Paid vs Non-paid；Paid 内 Ad Channels
-7. 20260304 新增 funnel（只在 Paid 内）：
+   - Purchases：Paid vs Non-paid；Paid 内 Ad Channels
+7. 新增 funnel（只在 Paid 内）：
    - Paid funnel 总览：lower / middle / high / No funnel
    - Paid 渠道 × funnel：各渠道内部 funnel 构成
-8. 20260304 新增：Actual Revenue 输入框
+8. ✅ 新增：Actual Revenue 输入框
    - 将所有 Revenue 类图表的 value 按输入的“真实总收入”进行整体缩放（结构不变）
 9. 支持下载清洗后的宽表 CSV（包含 Adjusted revenue）
 """
@@ -62,7 +62,11 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
     return out
 
 def find_header_row(lines: list[str], header_key: str = "Session default channel group") -> int:
-    """在原始文本行中定位真正的表头行（兼容 download.csv / funnel.csv）"""
+    """
+    在原始文本行中定位真正的表头行（兼容 GA4 导出前多行说明）。
+    注意：我们后面 read_csv 会设置 skip_blank_lines=False，
+    因此这里返回“原始行号（包含空行）”是安全的。
+    """
     for i, line in enumerate(lines):
         if line.strip().startswith(header_key):
             return i
@@ -150,7 +154,9 @@ if uploaded_file is not None:
         header_row = find_header_row(raw_text, "Session default channel group")
 
         csv_buffer = io.StringIO("\n".join(raw_text))
-        df_raw = pd.read_csv(csv_buffer, header=header_row)
+
+        # ✅ 修复：避免 pandas 自动跳过空行导致 header 行号错位
+        df_raw = pd.read_csv(csv_buffer, header=header_row, skip_blank_lines=False)
 
         # ----------------------------------------------------
         # 2) 删除 Grand total 行（GA4 导出通常会有）
@@ -200,6 +206,8 @@ if uploaded_file is not None:
 
         missing = [c for c in core_cols if c not in df_raw.columns]
         if missing:
+            # 这里如果再报 missing，通常是“读到的表头不是字段名行”
+            # 你可以在页面上查看 df_raw.columns 来排查
             raise ValueError(f"Missing required columns: {missing}")
 
         df = df_raw[core_cols].copy()
@@ -263,7 +271,6 @@ if uploaded_file is not None:
         st.success("✅ Data cleaned successfully! Preview below:")
         st.dataframe(df.head(20))
 
-        # paid_df 要在 Adjusted revenue 生成后再取
         paid_df = df[df["Paid or Non-paid"] == "Paid"].copy()
 
         # ====================================================
@@ -287,13 +294,9 @@ if uploaded_file is not None:
                 title="Paid vs Non-paid (Revenue - Rescaled)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
-            fig1.update_traces(
-                textinfo="none",
-                hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}"
-            )
+            fig1.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig1, use_container_width=True)
 
-        # Paid 内 Ad Channels（Revenue）- 原逻辑但用 Adjusted revenue
         revenue_alloc = {}
         for _, row in paid_df.iterrows():
             rev = float(row["Adjusted revenue"]) if not pd.isna(row["Adjusted revenue"]) else 0
@@ -325,14 +328,11 @@ if uploaded_file is not None:
                     title="Ad Channels (Revenue - Rescaled)",
                     color_discrete_sequence=px.colors.qualitative.Pastel
                 )
-                fig2.update_traces(
-                    textinfo="none",
-                    hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}"
-                )
+                fig2.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
                 st.plotly_chart(fig2, use_container_width=True)
 
         # ====================================================
-        # 📈 Purchase Distribution Visualization（不变，继续用 Purchases）
+        # 📈 Purchase Distribution Visualization（不变）
         # ====================================================
         st.subheader("📈 Purchase Distribution Visualization")
         col3, col4 = st.columns(2)
@@ -355,7 +355,6 @@ if uploaded_file is not None:
             fig3.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig3, use_container_width=True)
 
-        # Paid 内 Ad Channels（Purchases）- 原逻辑
         purchase_alloc = {}
         for _, row in paid_df.iterrows():
             pur = float(row["Purchases"]) if not pd.isna(row["Purchases"]) else 0
@@ -391,7 +390,7 @@ if uploaded_file is not None:
                 st.plotly_chart(fig4, use_container_width=True)
 
         # ====================================================
-        # ✅ 新增 1：Paid Funnel Overview（Revenue 用 Adjusted revenue；Purchases 不变）
+        # 🧩 Paid Funnel Overview（Revenue 用 Adjusted revenue；Purchases 不变）
         # ====================================================
         st.subheader("🧩 Paid Funnel Overview (Paid only)")
         if not has_funnel_cols:
@@ -399,7 +398,6 @@ if uploaded_file is not None:
         else:
             col5, col6 = st.columns(2)
 
-            # Revenue funnel（用 Adjusted revenue）
             alloc_rev = allocate_paid_attribution(paid_df, "Adjusted revenue", paid_keywords)
             with col5:
                 if alloc_rev.empty or alloc_rev["value"].sum() == 0:
@@ -416,7 +414,6 @@ if uploaded_file is not None:
                     fig5.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
                     st.plotly_chart(fig5, use_container_width=True)
 
-            # Purchases funnel（不变）
             alloc_pur = allocate_paid_attribution(paid_df, "Purchases", paid_keywords)
             with col6:
                 if alloc_pur.empty or alloc_pur["value"].sum() == 0:
@@ -434,13 +431,12 @@ if uploaded_file is not None:
                     st.plotly_chart(fig6, use_container_width=True)
 
         # ====================================================
-        # ✅ 新增 2：Paid Channel × Funnel Breakdown（Revenue 用 Adjusted revenue；Purchases 不变）
+        # 📊 Paid Channel × Funnel Breakdown（Revenue 用 Adjusted revenue；Purchases 不变）
         # ====================================================
         st.subheader("📊 Paid Channel × Funnel Breakdown (Paid only)")
         if has_funnel_cols:
             col7, col8 = st.columns(2)
 
-            # Revenue：渠道内 funnel 占比（堆叠百分比条形图）
             with col7:
                 alloc_rev = allocate_paid_attribution(paid_df, "Adjusted revenue", paid_keywords)
                 if alloc_rev.empty or alloc_rev["value"].sum() == 0:
@@ -461,7 +457,6 @@ if uploaded_file is not None:
                     fig7.update_layout(yaxis_tickformat=".0%", xaxis_title="", yaxis_title="Share")
                     st.plotly_chart(fig7, use_container_width=True)
 
-            # Purchases：渠道内 funnel 占比（堆叠百分比条形图）
             with col8:
                 alloc_pur = allocate_paid_attribution(paid_df, "Purchases", paid_keywords)
                 if alloc_pur.empty or alloc_pur["value"].sum() == 0:
