@@ -16,14 +16,17 @@ st.markdown(
 **使用说明 / Logic Overview**
 
 1. 上传 **GA4 导出的 CSV 文件**
-2. 自动跳过前几行说明，只读取核心数据表
-3. 统一并固定字段名称
+2. 自动定位表头行并读取核心数据
+3. 固定字段名称（Sessions / Purchases / Total revenue 等）
 4. 拆分 `source / medium`
 5. 基于关键词规则标记 **Paid / Non-paid**
-6. 可视化：
-   - Paid vs Non-paid（Revenue / Purchases）
-   - Paid 收入 / 订单数按 source 归因分摊（100% 或 50/50）
-7. 支持下载清洗后的宽表 CSV
+6. 可视化（保留原有两块）：
+   - Revenue：Paid vs Non-paid；Paid 内 Ad Channels
+   - Purchases：Paid vs Non-paid；Paid 内 Ad Channels
+7. 新增 funnel（只在 Paid 内）：
+   - Paid funnel 总览：lower / middle / high / No funnel
+   - Paid 渠道 × funnel：各渠道内部 funnel 构成
+8. 支持下载清洗后的宽表 CSV
 """
 )
 
@@ -48,15 +51,91 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
     if sp.shape[1] == 1:
         sp[1] = None
 
-    out = pd.DataFrame(
-        {src_name: sp[0], med_name: sp[1]},
-        index=col.index
-    )
+    out = pd.DataFrame({src_name: sp[0], med_name: sp[1]}, index=col.index)
 
     no_sep = ~col_norm.str.contains(r'[\/／]', regex=True)
     out.loc[no_sep, [src_name, med_name]] = "Unrecognized"
     out[src_name] = out[src_name].fillna("Unrecognized")
     out[med_name] = out[med_name].fillna("Unrecognized")
+    return out
+
+def find_header_row(lines: list[str], header_key: str = "Session default channel group") -> int:
+    """在原始文本行中定位真正的表头行（兼容 download.csv / funnel.csv）"""
+    for i, line in enumerate(lines):
+        if line.strip().startswith(header_key):
+            return i
+    raise ValueError(f"Cannot find header row by key: {header_key}")
+
+def to_number_series(s: pd.Series) -> pd.Series:
+    """把可能带逗号/空值的数字列转成 numeric"""
+    return pd.to_numeric(
+        s.astype(str).str.replace(",", "", regex=False).str.strip(),
+        errors="coerce"
+    )
+
+def extract_funnel(x) -> str:
+    """
+    funnel = manual ad content 最后一段（按 '-' 切分）
+    只认 lower/middle/high；其他/空/(not set) => No funnel
+    """
+    if pd.isna(x):
+        return "No funnel"
+    s = str(x).strip()
+    if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
+        return "No funnel"
+    # 按 '-' 取末段
+    last = s.split("-")[-1].strip().lower()
+    if last in {"lower", "middle", "high"}:
+        return last
+    return "No funnel"
+
+def allocate_paid_attribution(
+    paid_df: pd.DataFrame,
+    metric_col: str,
+    paid_keywords: list[str],
+) -> pd.DataFrame:
+    """
+    把 Paid 行按规则拆成“归因明细”：
+    - 渠道分摊：source1/source2（100% 或 50/50）
+    - funnel 分摊绑定渠道：给 source1 的那份用 funnel1；给 source2 的那份用 funnel2
+    返回列：
+    - Ad Channel
+    - Funnel
+    - value
+    """
+    rows = []
+
+    for _, row in paid_df.iterrows():
+        val = row.get(metric_col, 0)
+        val = 0 if pd.isna(val) else float(val)
+
+        m1 = str(row.get("medium1", "")).lower()
+        m2 = str(row.get("medium2", "")).lower()
+        s1 = row.get("source1", "Unrecognized")
+        s2 = row.get("source2", "Unrecognized")
+
+        f1 = row.get("funnel1", "No funnel")
+        f2 = row.get("funnel2", "No funnel")
+
+        has_m1 = any(k in m1 for k in paid_keywords)
+        has_m2 = any(k in m2 for k in paid_keywords)
+
+        if has_m1 and has_m2:
+            rows.append({"Ad Channel": s1, "Funnel": f1, "value": val * 0.5})
+            rows.append({"Ad Channel": s2, "Funnel": f2, "value": val * 0.5})
+        elif has_m1 and not has_m2:
+            rows.append({"Ad Channel": s1, "Funnel": f1, "value": val})
+        elif has_m2 and not has_m1:
+            rows.append({"Ad Channel": s2, "Funnel": f2, "value": val})
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+
+    # 统一 funnel 展示顺序（可选）
+    funnel_order = ["lower", "middle", "high", "No funnel"]
+    out["Funnel"] = out["Funnel"].where(out["Funnel"].isin({"lower", "middle", "high"}), "No funnel")
+    out["Funnel"] = pd.Categorical(out["Funnel"], categories=funnel_order, ordered=True)
     return out
 
 # ============================================================
@@ -65,185 +144,62 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
 if uploaded_file is not None:
     try:
         # ----------------------------------------------------
-        # 1. 读取 CSV（跳过前几行）
+        # 1) 读取原始文本并自动定位表头
         # ----------------------------------------------------
         raw_text = uploaded_file.getvalue().decode("utf-8", errors="ignore").splitlines()
+        header_row = find_header_row(raw_text, "Session default channel group")
+
         csv_buffer = io.StringIO("\n".join(raw_text))
-        df = pd.read_csv(csv_buffer, header=7)
-
-        if 8 in df.index:
-            df = df.drop(index=8)
-
-        if df.shape[1] > 9:
-            df = df.iloc[:, :9]
+        df_raw = pd.read_csv(csv_buffer, header=header_row)
 
         # ----------------------------------------------------
-        # 2. 重命名列
+        # 2) 删除 Grand total 行（GA4 导出通常会有）
         # ----------------------------------------------------
-        rename_map = {
-            df.columns[0]: "Session default channel group",
-            df.columns[1]: "Session source / medium",
-            df.columns[2]: "First user source / medium",
-            df.columns[3]: "Sessions",
-            df.columns[4]: "Total users",
-            df.columns[5]: "Add to carts",
-            df.columns[6]: "Checkouts",
-            df.columns[7]: "Purchases",
-            df.columns[8]: "Total revenue"
-        }
-        df.rename(columns=rename_map, inplace=True)
+        # 常见特征：维度列为空，最后一列出现 "Grand total"
+        if df_raw.shape[1] >= 1:
+            last_col = df_raw.columns[-1]
+            is_grand_total = df_raw[last_col].astype(str).str.contains("Grand total", na=False)
+            df_raw = df_raw[~is_grand_total].copy()
+
+        # 再保险：删掉 Session default channel group 为空的行
+        if "Session default channel group" in df_raw.columns:
+            df_raw = df_raw[~df_raw["Session default channel group"].isna()].copy()
 
         # ----------------------------------------------------
-        # 3. 拆 source / medium
+        # 3) 只保留“核心列”（兼容旧/新底稿）
         # ----------------------------------------------------
-        sm1 = split_source_medium(df["Session source / medium"], "source1", "medium1")
-        sm2 = split_source_medium(df["First user source / medium"], "source2", "medium2")
-        df = pd.concat([df, sm1, sm2], axis=1)
-
-        # ----------------------------------------------------
-        # 4. Paid / Non-paid 判定
-        # ----------------------------------------------------
-        paid_keywords = ["cpc", "paid", "shopping", "summersale"]
-
-        def judge_paid(row):
-            m1 = str(row["medium1"]).lower()
-            m2 = str(row["medium2"]).lower()
-            if m1 == "unrecognized" and m2 == "unrecognized":
-                return "Unrecognized"
-            if any(k in m1 for k in paid_keywords) or any(k in m2 for k in paid_keywords):
-                return "Paid"
-            return "Non-paid"
-
-        df["Paid or Non-paid"] = df.apply(judge_paid, axis=1)
-
-        # ----------------------------------------------------
-        # 5. 数据预览
-        # ----------------------------------------------------
-        st.success("✅ Data cleaned successfully!")
-        st.dataframe(df.head(20))
-
-        # ====================================================
-        # 📈 Revenue Distribution Visualization
-        # ====================================================
-        st.subheader("📈 Revenue Distribution Visualization")
-        col1, col2 = st.columns(2)
-
-        revenue_mother = (
-            df.groupby("Paid or Non-paid")["Total revenue"]
-              .sum()
-              .reset_index()
-        )
-        revenue_mother = revenue_mother[revenue_mother["Paid or Non-paid"] != "Unrecognized"]
-
-        with col1:
-            fig1 = px.pie(
-                revenue_mother,
-                names="Paid or Non-paid",
-                values="Total revenue",
-                title="Paid vs Non-paid (Revenue)",
-                color_discrete_sequence=px.colors.qualitative.Set2
-            )
-            fig1.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
-            st.plotly_chart(fig1, use_container_width=True)
-
-        paid_df = df[df["Paid or Non-paid"] == "Paid"].copy()
-        revenue_alloc = {}
-
-        for _, row in paid_df.iterrows():
-            rev = float(row["Total revenue"]) if not pd.isna(row["Total revenue"]) else 0
-            m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
-            s1, s2 = row["source1"], row["source2"]
-
-            has_m1 = any(k in m1 for k in paid_keywords)
-            has_m2 = any(k in m2 for k in paid_keywords)
-
-            if has_m1 and has_m2:
-                revenue_alloc[s1] = revenue_alloc.get(s1, 0) + rev * 0.5
-                revenue_alloc[s2] = revenue_alloc.get(s2, 0) + rev * 0.5
-            elif has_m1:
-                revenue_alloc[s1] = revenue_alloc.get(s1, 0) + rev
-            elif has_m2:
-                revenue_alloc[s2] = revenue_alloc.get(s2, 0) + rev
-
-        with col2:
-            if revenue_alloc:
-                rev_df = pd.DataFrame(revenue_alloc.items(), columns=["Ad Channel", "Total revenue"])
-                fig2 = px.pie(
-                    rev_df,
-                    names="Ad Channel",
-                    values="Total revenue",
-                    title="Ad Channels (Revenue)",
-                    color_discrete_sequence=px.colors.qualitative.Pastel
-                )
-                fig2.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
-                st.plotly_chart(fig2, use_container_width=True)
-
-        # ====================================================
-        # 📈 Purchase Distribution Visualization
-        # ====================================================
-        st.subheader("📈 Purchase Distribution Visualization")
-        col3, col4 = st.columns(2)
-
-        purchase_mother = (
-            df.groupby("Paid or Non-paid")["Purchases"]
-              .sum()
-              .reset_index()
-        )
-        purchase_mother = purchase_mother[purchase_mother["Paid or Non-paid"] != "Unrecognized"]
-
-        with col3:
-            fig3 = px.pie(
-                purchase_mother,
-                names="Paid or Non-paid",
-                values="Purchases",
-                title="Paid vs Non-paid (Purchases)",
-                color_discrete_sequence=px.colors.qualitative.Set2
-            )
-            fig3.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
-            st.plotly_chart(fig3, use_container_width=True)
-
-        purchase_alloc = {}
-
-        for _, row in paid_df.iterrows():
-            pur = int(row["Purchases"]) if not pd.isna(row["Purchases"]) else 0
-            m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
-            s1, s2 = row["source1"], row["source2"]
-
-            has_m1 = any(k in m1 for k in paid_keywords)
-            has_m2 = any(k in m2 for k in paid_keywords)
-
-            if has_m1 and has_m2:
-                purchase_alloc[s1] = purchase_alloc.get(s1, 0) + pur * 0.5
-                purchase_alloc[s2] = purchase_alloc.get(s2, 0) + pur * 0.5
-            elif has_m1:
-                purchase_alloc[s1] = purchase_alloc.get(s1, 0) + pur
-            elif has_m2:
-                purchase_alloc[s2] = purchase_alloc.get(s2, 0) + pur
-
-        with col4:
-            if purchase_alloc:
-                pur_df = pd.DataFrame(purchase_alloc.items(), columns=["Ad Channel", "Purchases"])
-                fig4 = px.pie(
-                    pur_df,
-                    names="Ad Channel",
-                    values="Purchases",
-                    title="Ad Channels (Purchases)",
-                    color_discrete_sequence=px.colors.qualitative.Pastel
-                )
-                fig4.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
-                st.plotly_chart(fig4, use_container_width=True)
-
-        # ----------------------------------------------------
-        # 6. 下载 CSV
-        # ----------------------------------------------------
-        output = io.BytesIO()
-        df.to_csv(output, index=False, encoding="utf-8-sig")
-        st.download_button(
-            "📥 Download cleaned CSV",
-            data=output.getvalue(),
-            file_name="cleaned_data.csv",
-            mime="text/csv"
+        has_funnel_cols = (
+            ("Session manual ad content" in df_raw.columns)
+            and ("First user manual ad content" in df_raw.columns)
         )
 
-    except Exception as e:
-        st.error(f"❌ Error during data processing: {e}")
+        if has_funnel_cols:
+            core_cols = [
+                "Session default channel group",
+                "Session source / medium",
+                "Session manual ad content",
+                "First user source / medium",
+                "First user manual ad content",
+                "Sessions",
+                "Total users",
+                "Add to carts",
+                "Checkouts",
+                "Purchases",
+                "Total revenue",
+            ]
+        else:
+            core_cols = [
+                "Session default channel group",
+                "Session source / medium",
+                "First user source / medium",
+                "Sessions",
+                "Total users",
+                "Add to carts",
+                "Checkouts",
+                "Purchases",
+                "Total revenue",
+            ]
+
+        missing = [c for c in core_cols if c not in df_raw.columns]
+        if missing:
+            raise Value
