@@ -4,6 +4,8 @@ import streamlit as st
 import pandas as pd
 import io
 import plotly.express as px
+import zipfile
+from datetime import datetime
 
 # ============================================================
 # 页面设置
@@ -28,8 +30,8 @@ st.markdown(
      - Paid funnel 总览：lower / middle / high / No funnel
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
-8. 20260305 展示颗粒度 由 「source」改为「source/medium」
-9. 支持下载清洗后的 CSV
+8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP
+9. 支持下载清洗后的 全量CSV
 """
 )
 
@@ -54,11 +56,7 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
     if sp.shape[1] == 1:
         sp[1] = None
 
-    out = pd.DataFrame(
-        {src_name: sp[0], med_name: sp[1]},
-        index=col.index
-    )
-
+    out = pd.DataFrame({src_name: sp[0], med_name: sp[1]}, index=col.index)
     no_sep = ~col_norm.str.contains(r'[\/／]', regex=True)
     out.loc[no_sep, [src_name, med_name]] = "Unrecognized"
     out[src_name] = out[src_name].fillna("Unrecognized")
@@ -68,29 +66,39 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
 def extract_funnel(x):
     if pd.isna(x):
         return "No funnel"
-
     s = str(x).strip()
     if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
         return "No funnel"
-
     last = s.split("-")[-1].strip().lower()
     if last in ["lower", "middle", "high"]:
         return last
-
     return "No funnel"
 
 def make_sm_key(source: str, medium: str) -> str:
-    """
-    ✅ 展示颗粒度改为 source/medium
-    - Paid 判定仍然只用 medium1/medium2，不受影响
-    - 这里仅用于展示与归因维度
-    """
     s = "Unrecognized" if pd.isna(source) else str(source).strip()
     m = "Unrecognized" if pd.isna(medium) else str(medium).strip()
     if s.lower() == "unrecognized" or m.lower() == "unrecognized" or s == "" or m == "":
         return "Unrecognized"
     return f"{s} / {m}"
 
+def df_to_csv_bytes(df_in: pd.DataFrame) -> bytes:
+    buf = io.StringIO()
+    df_in.to_csv(buf, index=False)
+    return buf.getvalue().encode("utf-8-sig")
+
+def safe_fig_to_png_bytes(fig, scale: int = 2) -> bytes | None:
+    """
+    Plotly 导出 PNG 需要 kaleido。
+    如果环境没有 kaleido，返回 None，导出 html。
+    """
+    try:
+        return fig.to_image(format="png", scale=scale)
+    except Exception:
+        return None
+
+def fig_to_html_bytes(fig) -> bytes:
+    html = fig.to_html(full_html=True, include_plotlyjs="cdn")
+    return html.encode("utf-8")
 
 # ============================================================
 # 主逻辑
@@ -140,7 +148,7 @@ if uploaded_file is not None:
         sm2 = split_source_medium(df["First user source / medium"], "source2", "medium2")
         df = pd.concat([df, sm1, sm2], axis=1)
 
-        # ✅ 新增：source/medium 展示维度（两侧分别生成）
+        # ✅ 展示颗粒度：source/medium
         df["sm1"] = df.apply(lambda r: make_sm_key(r["source1"], r["medium1"]), axis=1)
         df["sm2"] = df.apply(lambda r: make_sm_key(r["source2"], r["medium2"]), axis=1)
 
@@ -158,13 +166,10 @@ if uploaded_file is not None:
         def judge_paid(row):
             m1 = str(row["medium1"]).lower()
             m2 = str(row["medium2"]).lower()
-
             if m1 == "unrecognized" and m2 == "unrecognized":
                 return "Unrecognized"
-
             if any(k in m1 for k in paid_keywords) or any(k in m2 for k in paid_keywords):
                 return "Paid"
-
             return "Non-paid"
 
         df["Paid or Non-paid"] = df.apply(judge_paid, axis=1)
@@ -181,7 +186,6 @@ if uploaded_file is not None:
         st.subheader("💰 Actual Revenue Input")
 
         raw_revenue = float(df["Total revenue"].sum())
-
         actual_revenue = st.number_input(
             "Enter actual total revenue (Revenue values will be rescaled; structure stays the same)",
             min_value=0.0,
@@ -224,15 +228,10 @@ if uploaded_file is not None:
 
         paid_df = df[df["Paid or Non-paid"] == "Paid"].copy()
 
-        # ----------------------------------------------------
-        # Revenue 按 source/medium 归因分摊（只改展示颗粒度）
-        # ----------------------------------------------------
         revenue_alloc = {}
-
         for _, row in paid_df.iterrows():
             rev = float(row["Adjusted revenue"]) if not pd.isna(row["Adjusted revenue"]) else 0
             m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
-
             k1, k2 = row["sm1"], row["sm2"]
 
             has_m1 = any(k in m1 for k in paid_keywords)
@@ -283,15 +282,10 @@ if uploaded_file is not None:
             fig3.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig3, use_container_width=True)
 
-        # ----------------------------------------------------
-        # Purchase 按 source/medium 归因分摊（只改展示颗粒度）
-        # ----------------------------------------------------
         purchase_alloc = {}
-
         for _, row in paid_df.iterrows():
             pur = float(row["Purchases"]) if not pd.isna(row["Purchases"]) else 0
             m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
-
             k1, k2 = row["sm1"], row["sm2"]
 
             has_m1 = any(k in m1 for k in paid_keywords)
@@ -371,6 +365,10 @@ if uploaded_file is not None:
         # 1) Funnel 总览：Revenue 饼图
         if alloc_rev_df.empty or alloc_rev_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel revenue.")
+            fig6 = None
+            fig6b = None
+            cf_export = pd.DataFrame()
+            cf2_export = pd.DataFrame()
         else:
             funnel_rev_summary = alloc_rev_df.groupby("Funnel", observed=True)["Value"].sum().reset_index()
             fig5 = px.pie(
@@ -399,8 +397,14 @@ if uploaded_file is not None:
             st.plotly_chart(fig5b, use_container_width=True)
 
         # 3) Channel × Funnel 100% 堆叠图（Revenue）
+        fig6 = None
+        fig6b = None
+        cf_export = pd.DataFrame()
+        cf2_export = pd.DataFrame()
+
         if not alloc_rev_df.empty and alloc_rev_df["Value"].sum() > 0:
             st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Revenue")
+
             cf = (
                 alloc_rev_df.groupby(["Ad Channel (source/medium)", "Funnel"], observed=True)["Value"]
                 .sum()
@@ -417,6 +421,11 @@ if uploaded_file is not None:
                 .tolist()
             )
 
+            # ✅ 导出用表（含占比+金额）
+            cf_export = cf.copy()
+            cf_export["Share %"] = (cf_export["Share"] * 100).round(2)
+            cf_export = cf_export.sort_values(["Ad Channel (source/medium)", "Funnel"])
+
             fig6 = px.bar(
                 cf,
                 x="Ad Channel (source/medium)",
@@ -424,8 +433,22 @@ if uploaded_file is not None:
                 color="Funnel",
                 category_orders={"Ad Channel (source/medium)": channel_order, "Funnel": funnel_order},
                 title="Funnel Share within Each Paid Channel (Revenue - Rescaled)",
-                hover_data={"Value": ":,.0f", "Share": ":.2%", "Channel Total": ":,.0f"}
+                custom_data=["Value", "Channel Total"]
             )
+
+            # ✅ 图内显示：占比 + 金额
+            fig6.update_traces(
+                texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
+                textposition="inside",
+                hovertemplate=(
+                    "Channel: %{x}<br>"
+                    "Funnel: %{legendgroup}<br>"
+                    "Share: %{y:.2%}<br>"
+                    "Revenue: %{customdata[0]:,.0f}<br>"
+                    "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
+                )
+            )
+
             fig6.update_layout(
                 barmode="stack",
                 yaxis_tickformat=".0%",
@@ -438,6 +461,7 @@ if uploaded_file is not None:
         # 4) Channel × Funnel 100% 堆叠图（Purchase）
         if not alloc_pur_df.empty and alloc_pur_df["Value"].sum() > 0:
             st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Purchase")
+
             cf2 = (
                 alloc_pur_df.groupby(["Ad Channel (source/medium)", "Funnel"], observed=True)["Value"]
                 .sum()
@@ -454,6 +478,11 @@ if uploaded_file is not None:
                 .tolist()
             )
 
+            # ✅ 导出用表（含占比+订单数）
+            cf2_export = cf2.copy()
+            cf2_export["Share %"] = (cf2_export["Share"] * 100).round(2)
+            cf2_export = cf2_export.sort_values(["Ad Channel (source/medium)", "Funnel"])
+
             fig6b = px.bar(
                 cf2,
                 x="Ad Channel (source/medium)",
@@ -461,8 +490,22 @@ if uploaded_file is not None:
                 color="Funnel",
                 category_orders={"Ad Channel (source/medium)": channel_order2, "Funnel": funnel_order},
                 title="Funnel Share within Each Paid Channel (Purchase)",
-                hover_data={"Value": ":,.0f", "Share": ":.2%", "Channel Total": ":,.0f"}
+                custom_data=["Value", "Channel Total"]
             )
+
+            # ✅ 图内显示：占比 + 订单数
+            fig6b.update_traces(
+                texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
+                textposition="inside",
+                hovertemplate=(
+                    "Channel: %{x}<br>"
+                    "Funnel: %{legendgroup}<br>"
+                    "Share: %{y:.2%}<br>"
+                    "Purchases: %{customdata[0]:,.0f}<br>"
+                    "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
+                )
+            )
+
             fig6b.update_layout(
                 barmode="stack",
                 yaxis_tickformat=".0%",
@@ -472,8 +515,60 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig6b, use_container_width=True)
 
+        # ====================================================
+        # ✅ 下载：两张图 + 两张表（ZIP）
+        # ====================================================
+        if (fig6 is not None and not cf_export.empty) or (fig6b is not None and not cf2_export.empty):
+            st.subheader("⬇️ Download Channel×Funnel Package")
+
+            # 组装 ZIP
+            zip_buf = io.BytesIO()
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
+
+                # 1) 数据表
+                if not cf_export.empty:
+                    z.writestr(f"channel_funnel_revenue_table_{ts}.csv", df_to_csv_bytes(cf_export))
+                if not cf2_export.empty:
+                    z.writestr(f"channel_funnel_purchase_table_{ts}.csv", df_to_csv_bytes(cf2_export))
+
+                # 2) 图本身（优先 PNG，否则 HTML）
+                if fig6 is not None:
+                    png_bytes = safe_fig_to_png_bytes(fig6, scale=2)
+                    if png_bytes is not None:
+                        z.writestr(f"channel_funnel_revenue_chart_{ts}.png", png_bytes)
+                    else:
+                        z.writestr(f"channel_funnel_revenue_chart_{ts}.html", fig_to_html_bytes(fig6))
+
+                if fig6b is not None:
+                    png_bytes = safe_fig_to_png_bytes(fig6b, scale=2)
+                    if png_bytes is not None:
+                        z.writestr(f"channel_funnel_purchase_chart_{ts}.png", png_bytes)
+                    else:
+                        z.writestr(f"channel_funnel_purchase_chart_{ts}.html", fig_to_html_bytes(fig6b))
+
+                # 3) 简短说明
+                readme = (
+                    "This package includes:\n"
+                    "1) channel_funnel_revenue_table_*.csv: columns include Value (Revenue), Share, Share %, Channel Total\n"
+                    "2) channel_funnel_purchase_table_*.csv: columns include Value (Purchases), Share, Share %, Channel Total\n"
+                    "3) Charts exported as PNG if kaleido is available; otherwise exported as HTML.\n"
+                    "Note: Values are already allocated by the attribution rule (100% or 50/50) and bound to funnel.\n"
+                )
+                z.writestr(f"README_{ts}.txt", readme)
+
+            zip_buf.seek(0)
+
+            st.download_button(
+                label="📦 Download (Tables + Charts) ZIP",
+                data=zip_buf.getvalue(),
+                file_name=f"channel_funnel_package_{ts}.zip",
+                mime="application/zip"
+            )
+
         # ----------------------------------------------------
-        # 下载 CSV
+        # 下载清洗后的全量 CSV
         # ----------------------------------------------------
         output = io.BytesIO()
         df.to_csv(output, index=False, encoding="utf-8-sig")
