@@ -30,7 +30,7 @@ st.markdown(
      - Paid funnel 总览：lower / middle / high / No funnel
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
-8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP
+8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
 9. 支持下载清洗后的 全量CSV
 """
 )
