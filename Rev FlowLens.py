@@ -142,11 +142,31 @@ if uploaded_file is not None:
                 "Total revenue",
             ]
 
-        # ✅ 修复：GA4 可能导出首列空 header -> Unnamed: 0，导致整体错位
-        cols0 = str(df_raw.columns[0]).strip()
-        if cols0.lower().startswith("unnamed") and df_raw.shape[1] >= len(core_cols):
-            df_raw = df_raw.iloc[:, :len(core_cols)].copy()
-            df_raw.columns = core_cols
+        # ✅ 修复：GA4 可能导出首列空 header（''）或 Unnamed: 0，导致整体错位
+# 触发条件：
+# 1) 第一列列名为空/Unnamed
+# 或 2) 虽然列名正常，但 "Session default channel group" 这一列的值大量包含 "/"（明显是 source/medium）
+need_shift = False
+
+cols0 = str(df_raw.columns[0]).strip()
+if cols0 == "" or cols0.lower().startswith("unnamed"):
+    need_shift = True
+
+if (not need_shift) and ("Session default channel group" in df_raw.columns):
+    # 如果这个列里大量出现 "google / cpc" 这种带斜杠的值，说明错位了
+    cg = df_raw["Session default channel group"].astype(str)
+    slash_ratio = cg.str.contains(r"[\/／]", regex=True, na=False).mean()
+    if slash_ratio > 0.3:   # 阈值可调，0.3 足够稳
+        need_shift = True
+
+if need_shift:
+    # 先丢掉最左侧“空列”
+    df_raw = df_raw.drop(columns=[df_raw.columns[0]]).copy()
+
+# 再按 core_cols 的长度做“位置对齐重命名”（最稳）
+if df_raw.shape[1] >= len(core_cols):
+    df_raw = df_raw.iloc[:, :len(core_cols)].copy()
+    df_raw.columns = core_cols
 
         # 现在再检查缺失列
         missing = [c for c in core_cols if c not in df_raw.columns]
