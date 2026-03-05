@@ -138,7 +138,7 @@ if uploaded_file is not None:
         # ----------------------------------------------------
         # 6. Paid / Non-paid 判定
         # ----------------------------------------------------
-        paid_keywords = ["cpc", "paid", "shopping", "summersale"]
+        paid_keywords = ["cpc", "paid", "shopping", "summersale", "social"]
 
         def judge_paid(row):
             m1 = str(row["medium1"]).lower()
