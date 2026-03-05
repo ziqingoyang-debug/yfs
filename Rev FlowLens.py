@@ -27,7 +27,7 @@ st.markdown(
    - Paid 渠道归因分摊 Revenue
    - 20260210 新增 Paid 渠道归因分摊 Purchase
    - 20260304新增 funnel（只在 Paid 内）：
-     - Paid funnel 总览：lower / middle / upper / No funnel
+     - Paid funnel 总览：lower / middle / upper / supper_upper / No funnel
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
 8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
@@ -70,7 +70,7 @@ def extract_funnel(x):
     if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
         return "No funnel"
     last = s.split("-")[-1].strip().lower()
-    if last in ["lower", "middle", "upper"]:
+    if last in ["lower", "middle", "upper","supper_upper"]:
         return last
     return "No funnel"
 
@@ -349,13 +349,13 @@ if uploaded_file is not None:
         alloc_rev_df = pd.DataFrame(alloc_rows_rev)
         alloc_pur_df = pd.DataFrame(alloc_rows_pur)
 
-        funnel_order = ["lower", "middle", "upper", "No funnel"]
+        funnel_order = ["lower", "middle", "upper", "supper_upper", "No funnel"]
 
         def normalize_funnel(df_in: pd.DataFrame) -> pd.DataFrame:
             if df_in.empty:
                 return df_in
             df_in = df_in.copy()
-            df_in["Funnel"] = df_in["Funnel"].where(df_in["Funnel"].isin(["lower", "middle", "upper"]), "No funnel")
+            df_in["Funnel"] = df_in["Funnel"].where(df_in["Funnel"].isin(["lower", "middle", "upper", "supper_upper"]), "No funnel")
             df_in["Funnel"] = pd.Categorical(df_in["Funnel"], categories=funnel_order, ordered=True)
             return df_in
 
