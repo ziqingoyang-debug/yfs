@@ -31,7 +31,8 @@ st.markdown(
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
 8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
-9. 支持下载清洗后的 全量CSV
+9. ✅ 202603xx：Paid Funnel by Channel 的图例从 funnel 改为 场景+funnel（场景=倒数第二段：basic/executive/all；否则 No scene）
+10. 支持下载清洗后的 全量CSV
 """
 )
 
@@ -63,6 +64,9 @@ def split_source_medium(col: pd.Series, src_name: str, med_name: str) -> pd.Data
     out[med_name] = out[med_name].fillna("Unrecognized")
     return out
 
+FUNNEL_VALUES = {"lower", "middle", "upper", "supper_upper"}
+SCENE_VALUES = {"basic", "executive", "all"}
+
 def extract_funnel(x):
     if pd.isna(x):
         return "No funnel"
@@ -70,9 +74,33 @@ def extract_funnel(x):
     if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
         return "No funnel"
     last = s.split("-")[-1].strip().lower()
-    if last in ["lower", "middle", "upper","supper_upper"]:
+    if last in FUNNEL_VALUES:
         return last
     return "No funnel"
+
+def extract_scene(x):
+    """
+    场景 = 倒数第二段（仅认 basic/executive/all；否则 No scene）
+    例：pmax-executive-lower -> executive
+        search-all-lower -> all
+    """
+    if pd.isna(x):
+        return "No scene"
+    s = str(x).strip()
+    if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
+        return "No scene"
+    parts = [p.strip().lower() for p in s.split("-") if p.strip() != ""]
+    if len(parts) < 2:
+        return "No scene"
+    cand = parts[-2]
+    if cand in SCENE_VALUES:
+        return cand
+    return "No scene"
+
+def make_scene_funnel(scene: str, funnel: str) -> str:
+    sc = "No scene" if pd.isna(scene) else str(scene)
+    fu = "No funnel" if pd.isna(funnel) else str(funnel)
+    return f"{sc} - {fu}"
 
 def make_sm_key(source: str, medium: str) -> str:
     s = "Unrecognized" if pd.isna(source) else str(source).strip()
@@ -153,10 +181,16 @@ if uploaded_file is not None:
         df["sm2"] = df.apply(lambda r: make_sm_key(r["source2"], r["medium2"]), axis=1)
 
         # ----------------------------------------------------
-        # 5. Funnel 提取
+        # 5. Funnel / Scene 提取
         # ----------------------------------------------------
         df["funnel1"] = df["Session manual ad content"].apply(extract_funnel)
         df["funnel2"] = df["First user manual ad content"].apply(extract_funnel)
+
+        df["scene1"] = df["Session manual ad content"].apply(extract_scene)
+        df["scene2"] = df["First user manual ad content"].apply(extract_scene)
+
+        df["scene_funnel1"] = df.apply(lambda r: make_scene_funnel(r["scene1"], r["funnel1"]), axis=1)
+        df["scene_funnel2"] = df.apply(lambda r: make_scene_funnel(r["scene2"], r["funnel2"]), axis=1)
 
         # ----------------------------------------------------
         # 6. Paid / Non-paid 判定（仍然只用 medium1/medium2）
@@ -327,42 +361,59 @@ if uploaded_file is not None:
             m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
             k1, k2 = row["sm1"], row["sm2"]
             f1, f2 = row["funnel1"], row["funnel2"]
+            sf1, sf2 = row["scene_funnel1"], row["scene_funnel2"]
 
             has_m1 = any(k in m1 for k in paid_keywords)
             has_m2 = any(k in m2 for k in paid_keywords)
 
             if has_m1 and has_m2:
-                alloc_rows_rev.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "Value": rev * 0.5})
-                alloc_rows_rev.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "Value": rev * 0.5})
+                alloc_rows_rev.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "SceneFunnel": sf1, "Value": rev * 0.5})
+                alloc_rows_rev.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "SceneFunnel": sf2, "Value": rev * 0.5})
 
-                alloc_rows_pur.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "Value": pur * 0.5})
-                alloc_rows_pur.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "Value": pur * 0.5})
+                alloc_rows_pur.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "SceneFunnel": sf1, "Value": pur * 0.5})
+                alloc_rows_pur.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "SceneFunnel": sf2, "Value": pur * 0.5})
 
             elif has_m1 and not has_m2:
-                alloc_rows_rev.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "Value": rev})
-                alloc_rows_pur.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "Value": pur})
+                alloc_rows_rev.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "SceneFunnel": sf1, "Value": rev})
+                alloc_rows_pur.append({"Ad Channel (source/medium)": k1, "Funnel": f1, "SceneFunnel": sf1, "Value": pur})
 
             elif has_m2 and not has_m1:
-                alloc_rows_rev.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "Value": rev})
-                alloc_rows_pur.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "Value": pur})
+                alloc_rows_rev.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "SceneFunnel": sf2, "Value": rev})
+                alloc_rows_pur.append({"Ad Channel (source/medium)": k2, "Funnel": f2, "SceneFunnel": sf2, "Value": pur})
 
         alloc_rev_df = pd.DataFrame(alloc_rows_rev)
         alloc_pur_df = pd.DataFrame(alloc_rows_pur)
 
         funnel_order = ["lower", "middle", "upper", "supper_upper", "No funnel"]
+        scene_order = ["basic", "executive", "all", "No scene"]
 
         def normalize_funnel(df_in: pd.DataFrame) -> pd.DataFrame:
             if df_in.empty:
                 return df_in
             df_in = df_in.copy()
-            df_in["Funnel"] = df_in["Funnel"].where(df_in["Funnel"].isin(["lower", "middle", "upper", "supper_upper"]), "No funnel")
+            df_in["Funnel"] = df_in["Funnel"].where(df_in["Funnel"].isin(list(FUNNEL_VALUES)), "No funnel")
             df_in["Funnel"] = pd.Categorical(df_in["Funnel"], categories=funnel_order, ordered=True)
             return df_in
 
         alloc_rev_df = normalize_funnel(alloc_rev_df)
         alloc_pur_df = normalize_funnel(alloc_pur_df)
 
-        # 1) Funnel 总览：Revenue 饼图
+        # ✅ 构造 SceneFunnel 的固定排序（用于图例顺序稳定）
+        scene_funnel_order = [f"{sc} - {fu}" for sc in scene_order for fu in funnel_order]
+
+        def normalize_scene_funnel(df_in: pd.DataFrame) -> pd.DataFrame:
+            if df_in.empty:
+                return df_in
+            df_in = df_in.copy()
+            # SceneFunnel 已经是字符串，这里只是让类别顺序稳定
+            df_in["SceneFunnel"] = df_in["SceneFunnel"].where(df_in["SceneFunnel"].isin(scene_funnel_order), "No scene - No funnel")
+            df_in["SceneFunnel"] = pd.Categorical(df_in["SceneFunnel"], categories=scene_funnel_order, ordered=True)
+            return df_in
+
+        alloc_rev_df = normalize_scene_funnel(alloc_rev_df)
+        alloc_pur_df = normalize_scene_funnel(alloc_pur_df)
+
+        # 1) Funnel 总览：Revenue 饼图（保持不变：仍按 Funnel）
         if alloc_rev_df.empty or alloc_rev_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel revenue.")
             fig6 = None
@@ -381,7 +432,7 @@ if uploaded_file is not None:
             fig5.update_traces(textinfo="percent", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig5, use_container_width=True)
 
-        # 2) Funnel 总览：Purchase 饼图
+        # 2) Funnel 总览：Purchase 饼图（保持不变：仍按 Funnel）
         if alloc_pur_df.empty or alloc_pur_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel purchases.")
         else:
@@ -396,7 +447,7 @@ if uploaded_file is not None:
             fig5b.update_traces(textinfo="percent", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig5b, use_container_width=True)
 
-        # 3) Channel × Funnel 100% 堆叠图（Revenue）
+        # 3) Channel × (Scene+Funnel) 100% 堆叠图（Revenue）
         fig6 = None
         fig6b = None
         cf_export = pd.DataFrame()
@@ -406,7 +457,7 @@ if uploaded_file is not None:
             st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Revenue")
 
             cf = (
-                alloc_rev_df.groupby(["Ad Channel (source/medium)", "Funnel"], observed=True)["Value"]
+                alloc_rev_df.groupby(["Ad Channel (source/medium)", "SceneFunnel"], observed=True)["Value"]
                 .sum()
                 .reset_index()
             )
@@ -424,25 +475,27 @@ if uploaded_file is not None:
             # ✅ 导出用表（含占比+金额）
             cf_export = cf.copy()
             cf_export["Share %"] = (cf_export["Share"] * 100).round(2)
-            cf_export = cf_export.sort_values(["Ad Channel (source/medium)", "Funnel"])
+            cf_export = cf_export.sort_values(["Ad Channel (source/medium)", "SceneFunnel"])
 
             fig6 = px.bar(
                 cf,
                 x="Ad Channel (source/medium)",
                 y="Share",
-                color="Funnel",
-                category_orders={"Ad Channel (source/medium)": channel_order, "Funnel": funnel_order},
-                title="Funnel Share within Each Paid Channel (Revenue - Rescaled)",
+                color="SceneFunnel",
+                category_orders={
+                    "Ad Channel (source/medium)": channel_order,
+                    "SceneFunnel": scene_funnel_order
+                },
+                title="Funnel Share within Each Paid Channel (Revenue - Rescaled) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
             )
 
-            # ✅ 图内显示：占比 + 金额
             fig6.update_traces(
                 texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
                 textposition="inside",
                 hovertemplate=(
                     "Channel: %{x}<br>"
-                    "Funnel: %{legendgroup}<br>"
+                    "Scene+Funnel: %{legendgroup}<br>"
                     "Share: %{y:.2%}<br>"
                     "Revenue: %{customdata[0]:,.0f}<br>"
                     "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
@@ -454,16 +507,16 @@ if uploaded_file is not None:
                 yaxis_tickformat=".0%",
                 xaxis_title="Ad Channel (source/medium)",
                 yaxis_title="Share (100%)",
-                legend_title="Funnel"
+                legend_title="Scene + Funnel"
             )
             st.plotly_chart(fig6, use_container_width=True)
 
-        # 4) Channel × Funnel 100% 堆叠图（Purchase）
+        # 4) Channel × (Scene+Funnel) 100% 堆叠图（Purchase）
         if not alloc_pur_df.empty and alloc_pur_df["Value"].sum() > 0:
             st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Purchase")
 
             cf2 = (
-                alloc_pur_df.groupby(["Ad Channel (source/medium)", "Funnel"], observed=True)["Value"]
+                alloc_pur_df.groupby(["Ad Channel (source/medium)", "SceneFunnel"], observed=True)["Value"]
                 .sum()
                 .reset_index()
             )
@@ -481,25 +534,27 @@ if uploaded_file is not None:
             # ✅ 导出用表（含占比+订单数）
             cf2_export = cf2.copy()
             cf2_export["Share %"] = (cf2_export["Share"] * 100).round(2)
-            cf2_export = cf2_export.sort_values(["Ad Channel (source/medium)", "Funnel"])
+            cf2_export = cf2_export.sort_values(["Ad Channel (source/medium)", "SceneFunnel"])
 
             fig6b = px.bar(
                 cf2,
                 x="Ad Channel (source/medium)",
                 y="Share",
-                color="Funnel",
-                category_orders={"Ad Channel (source/medium)": channel_order2, "Funnel": funnel_order},
-                title="Funnel Share within Each Paid Channel (Purchase)",
+                color="SceneFunnel",
+                category_orders={
+                    "Ad Channel (source/medium)": channel_order2,
+                    "SceneFunnel": scene_funnel_order
+                },
+                title="Funnel Share within Each Paid Channel (Purchase) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
             )
 
-            # ✅ 图内显示：占比 + 订单数
             fig6b.update_traces(
                 texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
                 textposition="inside",
                 hovertemplate=(
                     "Channel: %{x}<br>"
-                    "Funnel: %{legendgroup}<br>"
+                    "Scene+Funnel: %{legendgroup}<br>"
                     "Share: %{y:.2%}<br>"
                     "Purchases: %{customdata[0]:,.0f}<br>"
                     "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
@@ -511,7 +566,7 @@ if uploaded_file is not None:
                 yaxis_tickformat=".0%",
                 xaxis_title="Ad Channel (source/medium)",
                 yaxis_title="Share (100%)",
-                legend_title="Funnel"
+                legend_title="Scene + Funnel"
             )
             st.plotly_chart(fig6b, use_container_width=True)
 
@@ -521,40 +576,36 @@ if uploaded_file is not None:
         if (fig6 is not None and not cf_export.empty) or (fig6b is not None and not cf2_export.empty):
             st.subheader("⬇️ Download Channel×Funnel Package")
 
-            # 组装 ZIP
             zip_buf = io.BytesIO()
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
 
-                # 1) 数据表
                 if not cf_export.empty:
-                    z.writestr(f"channel_funnel_revenue_table_{ts}.csv", df_to_csv_bytes(cf_export))
+                    z.writestr(f"channel_scene_funnel_revenue_table_{ts}.csv", df_to_csv_bytes(cf_export))
                 if not cf2_export.empty:
-                    z.writestr(f"channel_funnel_purchase_table_{ts}.csv", df_to_csv_bytes(cf2_export))
+                    z.writestr(f"channel_scene_funnel_purchase_table_{ts}.csv", df_to_csv_bytes(cf2_export))
 
-                # 2) 图本身（优先 PNG，否则 HTML）
                 if fig6 is not None:
                     png_bytes = safe_fig_to_png_bytes(fig6, scale=2)
                     if png_bytes is not None:
-                        z.writestr(f"channel_funnel_revenue_chart_{ts}.png", png_bytes)
+                        z.writestr(f"channel_scene_funnel_revenue_chart_{ts}.png", png_bytes)
                     else:
-                        z.writestr(f"channel_funnel_revenue_chart_{ts}.html", fig_to_html_bytes(fig6))
+                        z.writestr(f"channel_scene_funnel_revenue_chart_{ts}.html", fig_to_html_bytes(fig6))
 
                 if fig6b is not None:
                     png_bytes = safe_fig_to_png_bytes(fig6b, scale=2)
                     if png_bytes is not None:
-                        z.writestr(f"channel_funnel_purchase_chart_{ts}.png", png_bytes)
+                        z.writestr(f"channel_scene_funnel_purchase_chart_{ts}.png", png_bytes)
                     else:
-                        z.writestr(f"channel_funnel_purchase_chart_{ts}.html", fig_to_html_bytes(fig6b))
+                        z.writestr(f"channel_scene_funnel_purchase_chart_{ts}.html", fig_to_html_bytes(fig6b))
 
-                # 3) 简短说明
                 readme = (
                     "This package includes:\n"
-                    "1) channel_funnel_revenue_table_*.csv: columns include Value (Revenue), Share, Share %, Channel Total\n"
-                    "2) channel_funnel_purchase_table_*.csv: columns include Value (Purchases), Share, Share %, Channel Total\n"
+                    "1) *_revenue_table_*.csv: Value (Revenue), Share, Share %, Channel Total\n"
+                    "2) *_purchase_table_*.csv: Value (Purchases), Share, Share %, Channel Total\n"
                     "3) Charts exported as PNG if kaleido is available; otherwise exported as HTML.\n"
-                    "Note: Values are already allocated by the attribution rule (100% or 50/50) and bound to funnel.\n"
+                    "Note: Values are allocated by attribution rule (100% or 50/50) and bound to Scene+Funnel.\n"
                 )
                 z.writestr(f"README_{ts}.txt", readme)
 
@@ -563,7 +614,7 @@ if uploaded_file is not None:
             st.download_button(
                 label="📦 Download (Tables + Charts) ZIP",
                 data=zip_buf.getvalue(),
-                file_name=f"channel_funnel_package_{ts}.zip",
+                file_name=f"channel_scene_funnel_package_{ts}.zip",
                 mime="application/zip"
             )
 
