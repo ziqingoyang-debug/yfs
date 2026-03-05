@@ -26,13 +26,14 @@ st.markdown(
    - Paid vs Non-paid（Revenue / Purchases）
    - Paid 渠道归因分摊 Revenue
    - 20260210 新增 Paid 渠道归因分摊 Purchase
-   - 20260304新增 funnel（只在 Paid 内）：
+   - 20260304 新增 funnel（只在 Paid 内）：
      - Paid funnel 总览：lower / middle / upper / supper_upper / No funnel
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
-8. 20260305 展示颗粒度 由 「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
-9. 20260305：Paid Funnel by Channel 的图例从 funnel 改为 场景+funnel（场景=倒数第二段：basic/executive/all；否则 No scene）
-10. 支持下载清洗后的 全量CSV
+8. 20260305 展示颗粒度 由「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
+9. 20260305：Paid Funnel by Channel 的图例从 funnel 改为「场景 + funnel」
+   - 场景 = manual ad content 的倒数第二段（仅认 basic/executive/all；否则 No scene）
+10. 支持下载清洗后的全量 CSV
 """
 )
 
@@ -125,7 +126,8 @@ def safe_fig_to_png_bytes(fig, scale: int = 2) -> bytes | None:
         return None
 
 def fig_to_html_bytes(fig) -> bytes:
-    html = fig.to_html(full_html=True, include_plotlyjs="cdn")
+    # ✅ 内嵌 plotly.js，避免离线打开全黑/样式丢失
+    html = fig.to_html(full_html=True, include_plotlyjs="include")
     return html.encode("utf-8")
 
 # ============================================================
@@ -257,7 +259,10 @@ if uploaded_file is not None:
                 title="Paid vs Non-paid (Revenue - Rescaled)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
-            fig1.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
+            fig1.update_traces(
+                textinfo="none",
+                hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}"
+            )
             st.plotly_chart(fig1, use_container_width=True)
 
         paid_df = df[df["Paid or Non-paid"] == "Paid"].copy()
@@ -289,7 +294,10 @@ if uploaded_file is not None:
                     title="Ad Channels (source/medium) (Revenue - Rescaled)",
                     color_discrete_sequence=px.colors.qualitative.Pastel
                 )
-                fig2.update_traces(textinfo="none", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
+                fig2.update_traces(
+                    textinfo="none",
+                    hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}"
+                )
                 st.plotly_chart(fig2, use_container_width=True)
 
         # ====================================================
@@ -313,7 +321,10 @@ if uploaded_file is not None:
                 title="Paid vs Non-paid (Purchases)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
-            fig3.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
+            fig3.update_traces(
+                textinfo="none",
+                hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}"
+            )
             st.plotly_chart(fig3, use_container_width=True)
 
         purchase_alloc = {}
@@ -343,7 +354,10 @@ if uploaded_file is not None:
                     title="Ad Channels (source/medium) (Purchases)",
                     color_discrete_sequence=px.colors.qualitative.Pastel
                 )
-                fig4.update_traces(textinfo="none", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
+                fig4.update_traces(
+                    textinfo="none",
+                    hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}"
+                )
                 st.plotly_chart(fig4, use_container_width=True)
 
         # ====================================================
@@ -405,7 +419,6 @@ if uploaded_file is not None:
             if df_in.empty:
                 return df_in
             df_in = df_in.copy()
-            # SceneFunnel 已经是字符串，这里只是让类别顺序稳定
             df_in["SceneFunnel"] = df_in["SceneFunnel"].where(df_in["SceneFunnel"].isin(scene_funnel_order), "No scene - No funnel")
             df_in["SceneFunnel"] = pd.Categorical(df_in["SceneFunnel"], categories=scene_funnel_order, ordered=True)
             return df_in
@@ -413,7 +426,7 @@ if uploaded_file is not None:
         alloc_rev_df = normalize_scene_funnel(alloc_rev_df)
         alloc_pur_df = normalize_scene_funnel(alloc_pur_df)
 
-        # 1) Funnel 总览：Revenue 饼图（保持不变：仍按 Funnel）
+        # 1) Funnel 总览：Revenue 饼图（仍按 Funnel）
         if alloc_rev_df.empty or alloc_rev_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel revenue.")
             fig6 = None
@@ -429,10 +442,13 @@ if uploaded_file is not None:
                 title="Paid Funnel Share (Revenue - Rescaled)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
-            fig5.update_traces(textinfo="percent", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
+            fig5.update_traces(
+                textinfo="percent",
+                hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}"
+            )
             st.plotly_chart(fig5, use_container_width=True)
 
-        # 2) Funnel 总览：Purchase 饼图（保持不变：仍按 Funnel）
+        # 2) Funnel 总览：Purchase 饼图（仍按 Funnel）
         if alloc_pur_df.empty or alloc_pur_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel purchases.")
         else:
@@ -444,7 +460,10 @@ if uploaded_file is not None:
                 title="Paid Funnel Share (Purchase)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
-            fig5b.update_traces(textinfo="percent", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
+            fig5b.update_traces(
+                textinfo="percent",
+                hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}"
+            )
             st.plotly_chart(fig5b, use_container_width=True)
 
         # 3) Channel × (Scene+Funnel) 100% 堆叠图（Revenue）
@@ -486,16 +505,19 @@ if uploaded_file is not None:
                     "Ad Channel (source/medium)": channel_order,
                     "SceneFunnel": scene_funnel_order
                 },
+                # ✅ 显式颜色序列 + 稳定离线展示
+                color_discrete_sequence=px.colors.qualitative.Set2,
                 title="Funnel Share within Each Paid Channel (Revenue - Rescaled) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
             )
 
+            # ✅ hover 用 fullData.name，避免出现 '-'（legendgroup 可能为空）
             fig6.update_traces(
                 texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
                 textposition="inside",
                 hovertemplate=(
                     "Channel: %{x}<br>"
-                    "Scene+Funnel: %{legendgroup}<br>"
+                    "Scene+Funnel: %{fullData.name}<br>"
                     "Share: %{y:.2%}<br>"
                     "Revenue: %{customdata[0]:,.0f}<br>"
                     "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
@@ -545,6 +567,8 @@ if uploaded_file is not None:
                     "Ad Channel (source/medium)": channel_order2,
                     "SceneFunnel": scene_funnel_order
                 },
+                # ✅ 显式颜色序列 + 稳定离线展示
+                color_discrete_sequence=px.colors.qualitative.Set2,
                 title="Funnel Share within Each Paid Channel (Purchase) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
             )
@@ -554,7 +578,7 @@ if uploaded_file is not None:
                 textposition="inside",
                 hovertemplate=(
                     "Channel: %{x}<br>"
-                    "Scene+Funnel: %{legendgroup}<br>"
+                    "Scene+Funnel: %{fullData.name}<br>"
                     "Share: %{y:.2%}<br>"
                     "Purchases: %{customdata[0]:,.0f}<br>"
                     "Channel Total: %{customdata[1]:,.0f}<extra></extra>"
@@ -581,11 +605,13 @@ if uploaded_file is not None:
 
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
 
+                # 1) 数据表
                 if not cf_export.empty:
                     z.writestr(f"channel_scene_funnel_revenue_table_{ts}.csv", df_to_csv_bytes(cf_export))
                 if not cf2_export.empty:
                     z.writestr(f"channel_scene_funnel_purchase_table_{ts}.csv", df_to_csv_bytes(cf2_export))
 
+                # 2) 图本身（优先 PNG，否则 HTML）
                 if fig6 is not None:
                     png_bytes = safe_fig_to_png_bytes(fig6, scale=2)
                     if png_bytes is not None:
@@ -600,12 +626,14 @@ if uploaded_file is not None:
                     else:
                         z.writestr(f"channel_scene_funnel_purchase_chart_{ts}.html", fig_to_html_bytes(fig6b))
 
+                # 3) 简短说明
                 readme = (
                     "This package includes:\n"
                     "1) *_revenue_table_*.csv: Value (Revenue), Share, Share %, Channel Total\n"
                     "2) *_purchase_table_*.csv: Value (Purchases), Share, Share %, Channel Total\n"
                     "3) Charts exported as PNG if kaleido is available; otherwise exported as HTML.\n"
                     "Note: Values are allocated by attribution rule (100% or 50/50) and bound to Scene+Funnel.\n"
+                    "HTML export includes embedded plotly.js to support offline viewing.\n"
                 )
                 z.writestr(f"README_{ts}.txt", readme)
 
