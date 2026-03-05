@@ -16,17 +16,17 @@ st.markdown(
 **使用说明 / Logic Overview**
 
 1. 上传 **GA4 导出的 CSV 文件**
-2. 自动定位表头行并读取核心数据（✅ 已兼容空行 + 首列空表头导致的错位）
+2. 自动定位表头行并读取核心数据
 3. 固定字段名称（Sessions / Purchases / Total revenue 等）
-4. 拆分 `source / medium`
-5. 基于关键词规则标记 **Paid / Non-paid**
-6. 可视化（保留原有两块）：
+4. 拆分 source / medium
+5. 基于关键词规则标记 Paid / Non-paid
+6. 可视化：
    - Revenue：Paid vs Non-paid；Paid 内 Ad Channels
-   - Purchases：Paid vs Non-paid；Paid 内 Ad Channels
-7. 新增 funnel（只在 Paid 内）：
+   - 202602新增 Purchases：Paid vs Non-paid；Paid 内 Ad Channels
+7. 20260304新增 funnel（只在 Paid 内）：
    - Paid funnel 总览：lower / middle / high / No funnel
    - Paid 渠道 × funnel：各渠道内部 funnel 构成
-8. ✅ Actual Revenue 输入框
+8. 20260304新增 Actual Revenue 输入框
    - 将所有 Revenue 类图表的 value 按输入的“真实总收入”进行整体缩放（结构不变）
 9. 支持下载清洗后的宽表 CSV（包含 Adjusted revenue）
 """
