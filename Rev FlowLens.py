@@ -27,7 +27,7 @@ st.markdown(
    - 20260304新增 funnel（只在 Paid 内）：
      - Paid funnel 总览：lower / middle / high / No funnel
      - Paid 渠道 × funnel：各渠道内部 funnel 构成
-7. 20260304 新增支持输入 **真实总收入** 自动重分配 Revenue
+7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
 8. 支持下载清洗后的 CSV
 """
 )
@@ -86,12 +86,10 @@ if uploaded_file is not None:
 
     try:
         # ----------------------------------------------------
-        # 1. 读取 CSV
+        # 1. 读取 CSV（旧版强假设：GA4 导出结构固定）
         # ----------------------------------------------------
         raw_text = uploaded_file.getvalue().decode("utf-8", errors="ignore").splitlines()
         csv_buffer = io.StringIO("\n".join(raw_text))
-
-        # 旧版强假设：GA4 导出结构固定
         df = pd.read_csv(csv_buffer, header=7)
 
         # 删掉常见的 grand total 行（旧版逻辑）
@@ -138,7 +136,7 @@ if uploaded_file is not None:
         # ----------------------------------------------------
         # 6. Paid / Non-paid 判定
         # ----------------------------------------------------
-        paid_keywords = ["cpc", "paid", "shopping", "summersale", "social"]
+        paid_keywords = ["cpc", "paid", "shopping", "summersale","social"]
 
         def judge_paid(row):
             m1 = str(row["medium1"]).lower()
@@ -296,16 +294,17 @@ if uploaded_file is not None:
                 st.plotly_chart(fig4, use_container_width=True)
 
         # ====================================================
-        # 📊 Paid Funnel Distribution（保留你的饼图）
+        # 📊 Paid Funnel Distribution（新增 Purchase 饼图 + Purchase 堆叠图）
         # ====================================================
         st.subheader("📊 Paid Funnel Distribution")
 
-        # --------- 构造“渠道绑定 funnel”的分摊明细 ----------
-        # 每条 Paid 行，按 Paid 判定分摊到 source1/source2，并绑定 funnel1/funnel2
-        alloc_rows = []
+        # --------- 构造“渠道绑定 funnel”的分摊明细（Revenue / Purchases） ----------
+        alloc_rows_rev = []
+        alloc_rows_pur = []
 
         for _, row in paid_df.iterrows():
             rev = float(row["Adjusted revenue"]) if not pd.isna(row["Adjusted revenue"]) else 0
+            pur = float(row["Purchases"]) if not pd.isna(row["Purchases"]) else 0
 
             m1, m2 = str(row["medium1"]).lower(), str(row["medium2"]).lower()
             s1, s2 = row["source1"], row["source2"]
@@ -315,54 +314,86 @@ if uploaded_file is not None:
             has_m2 = any(k in m2 for k in paid_keywords)
 
             if has_m1 and has_m2:
-                alloc_rows.append({"Ad Channel": s1, "Funnel": f1, "Revenue": rev * 0.5})
-                alloc_rows.append({"Ad Channel": s2, "Funnel": f2, "Revenue": rev * 0.5})
+                alloc_rows_rev.append({"Ad Channel": s1, "Funnel": f1, "Value": rev * 0.5})
+                alloc_rows_rev.append({"Ad Channel": s2, "Funnel": f2, "Value": rev * 0.5})
+
+                alloc_rows_pur.append({"Ad Channel": s1, "Funnel": f1, "Value": pur * 0.5})
+                alloc_rows_pur.append({"Ad Channel": s2, "Funnel": f2, "Value": pur * 0.5})
+
             elif has_m1 and not has_m2:
-                alloc_rows.append({"Ad Channel": s1, "Funnel": f1, "Revenue": rev})
+                alloc_rows_rev.append({"Ad Channel": s1, "Funnel": f1, "Value": rev})
+                alloc_rows_pur.append({"Ad Channel": s1, "Funnel": f1, "Value": pur})
+
             elif has_m2 and not has_m1:
-                alloc_rows.append({"Ad Channel": s2, "Funnel": f2, "Revenue": rev})
+                alloc_rows_rev.append({"Ad Channel": s2, "Funnel": f2, "Value": rev})
+                alloc_rows_pur.append({"Ad Channel": s2, "Funnel": f2, "Value": pur})
 
-        alloc_df = pd.DataFrame(alloc_rows)
+        alloc_rev_df = pd.DataFrame(alloc_rows_rev)
+        alloc_pur_df = pd.DataFrame(alloc_rows_pur)
 
-        # --------- 1) Funnel 总览饼图（保留） ----------
-        if alloc_df.empty or alloc_df["Revenue"].sum() == 0:
+        # funnel 顺序
+        funnel_order = ["lower", "middle", "high", "No funnel"]
+
+        def normalize_funnel(df_in: pd.DataFrame) -> pd.DataFrame:
+            if df_in.empty:
+                return df_in
+            df_in = df_in.copy()
+            df_in["Funnel"] = df_in["Funnel"].where(df_in["Funnel"].isin(["lower", "middle", "high"]), "No funnel")
+            df_in["Funnel"] = pd.Categorical(df_in["Funnel"], categories=funnel_order, ordered=True)
+            return df_in
+
+        alloc_rev_df = normalize_funnel(alloc_rev_df)
+        alloc_pur_df = normalize_funnel(alloc_pur_df)
+
+        # -------------------------
+        # 1) Funnel 总览：Revenue 饼图
+        # -------------------------
+        if alloc_rev_df.empty or alloc_rev_df["Value"].sum() == 0:
             st.warning("⚠️ No valid paid funnel revenue.")
         else:
-            funnel_summary = alloc_df.groupby("Funnel")["Revenue"].sum().reset_index()
-
+            funnel_rev_summary = alloc_rev_df.groupby("Funnel", observed=True)["Value"].sum().reset_index()
             fig5 = px.pie(
-                funnel_summary,
+                funnel_rev_summary,
                 names="Funnel",
-                values="Revenue",
+                values="Value",
                 title="Paid Funnel Share (Revenue - Rescaled)",
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
             fig5.update_traces(textinfo="percent", hovertemplate="%{label}<br>Revenue: %{value:,.0f}<br>Share: %{percent}")
             st.plotly_chart(fig5, use_container_width=True)
 
-            # ====================================================
-            # ✅ 新增：Channel × Funnel 100% 堆叠图（显示百分比 + hover 显示金额）
-            # ====================================================
-            st.subheader("📊 Paid Funnel by Channel (100% Stacked)")
+        # -------------------------
+        # 2) Funnel 总览：Purchase 饼图（新增）
+        # -------------------------
+        if alloc_pur_df.empty or alloc_pur_df["Value"].sum() == 0:
+            st.warning("⚠️ No valid paid funnel purchases.")
+        else:
+            funnel_pur_summary = alloc_pur_df.groupby("Funnel", observed=True)["Value"].sum().reset_index()
+            fig5b = px.pie(
+                funnel_pur_summary,
+                names="Funnel",
+                values="Value",
+                title="Paid Funnel Share (Purchase)",
+                color_discrete_sequence=px.colors.qualitative.Set2
+            )
+            fig5b.update_traces(textinfo="percent", hovertemplate="%{label}<br>Purchases: %{value:,.0f}<br>Share: %{percent}")
+            st.plotly_chart(fig5b, use_container_width=True)
 
+        # ====================================================
+        # ✅ 新增：Channel × Funnel 100% 堆叠图（Revenue）
+        # ====================================================
+        if not alloc_rev_df.empty and alloc_rev_df["Value"].sum() > 0:
+            st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Revenue")
             cf = (
-                alloc_df.groupby(["Ad Channel", "Funnel"])["Revenue"]
+                alloc_rev_df.groupby(["Ad Channel", "Funnel"], observed=True)["Value"]
                 .sum()
                 .reset_index()
             )
+            cf["Channel Total"] = cf.groupby("Ad Channel")["Value"].transform("sum")
+            cf["Share"] = cf["Value"] / cf["Channel Total"]
 
-            # 计算每个渠道的总额与占比
-            cf["Channel Total"] = cf.groupby("Ad Channel")["Revenue"].transform("sum")
-            cf["Share"] = cf["Revenue"] / cf["Channel Total"]
-
-            # 保持 funnel 顺序（lower/middle/high/No funnel）
-            funnel_order = ["lower", "middle", "high", "No funnel"]
-            cf["Funnel"] = cf["Funnel"].where(cf["Funnel"].isin(["lower", "middle", "high"]), "No funnel")
-            cf["Funnel"] = pd.Categorical(cf["Funnel"], categories=funnel_order, ordered=True)
-
-            # 渠道排序：按渠道总收入降序
             channel_order = (
-                cf.groupby("Ad Channel")["Revenue"]
+                cf.groupby("Ad Channel")["Value"]
                 .sum()
                 .sort_values(ascending=False)
                 .index
@@ -376,11 +407,7 @@ if uploaded_file is not None:
                 color="Funnel",
                 category_orders={"Ad Channel": channel_order, "Funnel": funnel_order},
                 title="Funnel Share within Each Paid Channel (Revenue - Rescaled)",
-                hover_data={
-                    "Revenue": ":,.0f",
-                    "Share": ":.2%",
-                    "Channel Total": ":,.0f"
-                }
+                hover_data={"Value": ":,.0f", "Share": ":.2%", "Channel Total": ":,.0f"}
             )
             fig6.update_layout(
                 barmode="stack",
@@ -390,6 +417,45 @@ if uploaded_file is not None:
                 legend_title="Funnel"
             )
             st.plotly_chart(fig6, use_container_width=True)
+
+        # ====================================================
+        # ✅ 新增：Channel × Funnel 100% 堆叠图（Purchase）
+        # ====================================================
+        if not alloc_pur_df.empty and alloc_pur_df["Value"].sum() > 0:
+            st.subheader("📊 Paid Funnel by Channel (100% Stacked) - Purchase")
+            cf2 = (
+                alloc_pur_df.groupby(["Ad Channel", "Funnel"], observed=True)["Value"]
+                .sum()
+                .reset_index()
+            )
+            cf2["Channel Total"] = cf2.groupby("Ad Channel")["Value"].transform("sum")
+            cf2["Share"] = cf2["Value"] / cf2["Channel Total"]
+
+            channel_order2 = (
+                cf2.groupby("Ad Channel")["Value"]
+                .sum()
+                .sort_values(ascending=False)
+                .index
+                .tolist()
+            )
+
+            fig6b = px.bar(
+                cf2,
+                x="Ad Channel",
+                y="Share",
+                color="Funnel",
+                category_orders={"Ad Channel": channel_order2, "Funnel": funnel_order},
+                title="Funnel Share within Each Paid Channel (Purchase)",
+                hover_data={"Value": ":,.0f", "Share": ":.2%", "Channel Total": ":,.0f"}
+            )
+            fig6b.update_layout(
+                barmode="stack",
+                yaxis_tickformat=".0%",
+                xaxis_title="Ad Channel",
+                yaxis_title="Share (100%)",
+                legend_title="Funnel"
+            )
+            st.plotly_chart(fig6b, use_container_width=True)
 
         # ----------------------------------------------------
         # 下载 CSV
