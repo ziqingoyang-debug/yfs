@@ -15,7 +15,7 @@ st.markdown(
     """
 **使用说明 / Logic Overview**
 
-1. 上传 **GA4 导出的 CSV 文件**
+1. 上传 GA4 导出的 CSV 文件：Explorations 的「自定义归因模型（LND+最初来源）V2」
 2. 自动定位表头行并读取核心数据
 3. 固定字段名称（Sessions / Purchases / Total revenue 等）
 4. 拆分 source / medium
