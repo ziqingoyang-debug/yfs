@@ -15,18 +15,21 @@ st.markdown(
 """
 **使用说明 / Logic Overview**
 
-1. 上传 **GA4 导出的 CSV 文件**
+1. 上传 GA4 导出的 CSV 文件：Explorations 的「自定义归因模型（LND+最初来源）V2」
 2. 自动跳过前几行说明，只读取核心数据表
 3. 固定字段名称（按列位置）
-4. 拆分 `source / medium`
-5. 标记 **Paid / Non-paid**（仍然只用 medium1 / medium2 判断）
-6. 可视化（全部保留）：
+4. 拆分 source / medium
+5. 基于关键词规则标记 Paid / Non-paid
+6. 可视化：
    - Paid vs Non-paid（Revenue / Purchases）
-   - Paid 渠道归因分摊（100% 或 50/50）
-   - Paid Funnel 分布（Revenue / Purchases）
-   - Paid Funnel by Channel（Revenue / Purchases，100% 堆叠图）
-7. 支持输入 **真实总收入** 自动重分配 Revenue
-8. 支持下载清洗后的 CSV
+   - Paid 渠道归因分摊 Revenue
+   - 20260210 新增 Paid 渠道归因分摊 Purchase
+   - 20260304新增 funnel（只在 Paid 内）：
+     - Paid funnel 总览：lower / middle / high / No funnel
+     - Paid 渠道 × funnel：各渠道内部 funnel 构成
+7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
+8. 20260305 展示颗粒度 由 「source」改为「source/medium」
+9. 支持下载清洗后的 CSV
 """
 )
 
@@ -193,7 +196,7 @@ if uploaded_file is not None:
         # 9. 数据预览
         # ----------------------------------------------------
         st.success("✅ Data cleaned successfully!")
-        st.dataframe(df.head(20))
+        st.dataframe(df)
 
         # ====================================================
         # 📈 Revenue Distribution Visualization
