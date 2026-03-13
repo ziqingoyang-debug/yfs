@@ -81,21 +81,24 @@ def extract_funnel(x):
 
 def extract_scene(x):
     """
-    场景 = 倒数第二段（仅认 basic/executive/all；否则 No scene）
-    例：pmax-executive-lower -> executive
-        search-all-lower -> all
+    场景识别：不看第几段，直接在整个 content 中识别
+    只认 basic / executive / all；否则 No scene
     """
     if pd.isna(x):
         return "No scene"
-    s = str(x).strip()
-    if s == "" or s.lower() in {"(not set)", "not set", "nan", "none"}:
+
+    s = str(x).strip().lower()
+
+    if s == "" or s in {"(not set)", "not set", "nan", "none"}:
         return "No scene"
-    parts = [p.strip().lower() for p in s.split("-") if p.strip() != ""]
-    if len(parts) < 2:
-        return "No scene"
-    cand = parts[-2]
-    if cand in SCENE_VALUES:
-        return cand
+
+    if "executive" in s:
+        return "executive"
+    if "basic" in s:
+        return "basic"
+    if "all" in s:
+        return "all"
+
     return "No scene"
 
 def make_scene_funnel(scene: str, funnel: str) -> str:
