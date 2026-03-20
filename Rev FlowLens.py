@@ -10,7 +10,7 @@ from datetime import datetime
 # ============================================================
 # 页面设置
 # ============================================================
-st.set_page_config(page_title="Custom Attribution Model", layout="wide")
+st.set_page_config(page_title="前后均衡归因模型(模型版本号：V2.1)", layout="wide")
 st.title("📊 Custom Attribution Model")
 
 st.markdown(
