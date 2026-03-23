@@ -10,14 +10,14 @@ from datetime import datetime
 # ============================================================
 # 页面设置
 # ============================================================
-st.set_page_config(page_title="前后均衡归因模型(模型版本号：V2.1)", layout="wide")
-st.title("📊 Custom Attribution Model")
+st.set_page_config(page_title="前后均衡归因模型(版本号：V2.1)", layout="wide")
+st.title("📊 前后均衡归因模型")
 
 st.markdown(
 """
 **使用说明 / Logic Overview**
 
-1. 上传 GA4 导出的 CSV 文件：Explorations 的「自定义归因模型（LND+最初来源）V2」
+1. 上传 GA4 导出的 CSV 文件：Explorations 的「前后均衡归因模型模型（LND+最初来源）V2.1」
 2. 自动跳过前几行说明，只读取核心数据表
 3. 固定字段名称（按列位置）
 4. 拆分 source / medium
