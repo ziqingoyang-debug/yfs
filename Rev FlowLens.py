@@ -32,7 +32,7 @@ st.markdown(
 7. 20260304 新增支持输入 真实总收入 自动重分配 Revenue
 8. 20260305 展示颗粒度 由「source」改为「source/medium」，支持下载：Channel×Funnel 两张堆叠图 + 对应数据表（ZIP）
 9. 20260305：Paid Funnel by Channel 的图例从 funnel 改为「场景 + funnel」
-   - 场景 = manual ad content 的倒数第二段（仅认 basic/executive/all；否则 No scene）
+   - 场景 = manual ad content 中全文识别 basic / executive / all；否则 No scene
 10. 支持下载清洗后的全量 CSV
 """
 )
@@ -129,9 +129,21 @@ def safe_fig_to_png_bytes(fig, scale: int = 2) -> bytes | None:
         return None
 
 def fig_to_html_bytes(fig) -> bytes:
-    # ✅ 内嵌 plotly.js，避免离线打开全黑/样式丢失
+    # 内嵌 plotly.js，避免离线打开全黑/样式丢失
     html = fig.to_html(full_html=True, include_plotlyjs="include")
     return html.encode("utf-8")
+
+def remove_grand_total_rows(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    ✅ 替代原来的 drop(index=8)
+    按内容删除真正的汇总行，而不是按固定行号删。
+    只要任意单元格包含 'Grand total'（大小写不敏感），就删掉该行。
+    """
+    contains_grand_total = df_raw.astype(str).apply(
+        lambda col: col.str.contains("Grand total", case=False, na=False)
+    )
+    row_mask = contains_grand_total.any(axis=1)
+    return df_raw.loc[~row_mask].copy()
 
 # ============================================================
 # 主逻辑
@@ -146,15 +158,14 @@ if uploaded_file is not None:
         csv_buffer = io.StringIO("\n".join(raw_text))
         df = pd.read_csv(csv_buffer, header=7)
 
-        # 删掉常见的 grand total 行（旧版逻辑）
-        if 8 in df.index:
-            df = df.drop(index=8)
+        # ✅ 删除真正的 Grand total 行（替代原来的固定 drop(index=8)）
+        df = remove_grand_total_rows(df)
 
         # ----------------------------------------------------
         # 2. 只保留前 11 列（包含 funnel 两列）
         # ----------------------------------------------------
         if df.shape[1] > 11:
-            df = df.iloc[:, :11]
+            df = df.iloc[:, :11].copy()
 
         # ----------------------------------------------------
         # 3. 按位置重命名列
@@ -174,6 +185,9 @@ if uploaded_file is not None:
         }
         df.rename(columns=rename_map, inplace=True)
 
+        # 重置索引，避免后续索引混淆
+        df.reset_index(drop=True, inplace=True)
+
         # ----------------------------------------------------
         # 4. 拆 source / medium
         # ----------------------------------------------------
@@ -181,7 +195,7 @@ if uploaded_file is not None:
         sm2 = split_source_medium(df["First user source / medium"], "source2", "medium2")
         df = pd.concat([df, sm1, sm2], axis=1)
 
-        # ✅ 展示颗粒度：source/medium
+        # 展示颗粒度：source/medium
         df["sm1"] = df.apply(lambda r: make_sm_key(r["source1"], r["medium1"]), axis=1)
         df["sm2"] = df.apply(lambda r: make_sm_key(r["source2"], r["medium2"]), axis=1)
 
@@ -415,7 +429,6 @@ if uploaded_file is not None:
         alloc_rev_df = normalize_funnel(alloc_rev_df)
         alloc_pur_df = normalize_funnel(alloc_pur_df)
 
-        # ✅ 构造 SceneFunnel 的固定排序（用于图例顺序稳定）
         scene_funnel_order = [f"{sc} - {fu}" for sc in scene_order for fu in funnel_order]
 
         def normalize_scene_funnel(df_in: pd.DataFrame) -> pd.DataFrame:
@@ -494,7 +507,6 @@ if uploaded_file is not None:
                 .tolist()
             )
 
-            # ✅ 导出用表（含占比+金额）
             cf_export = cf.copy()
             cf_export["Share %"] = (cf_export["Share"] * 100).round(2)
             cf_export = cf_export.sort_values(["Ad Channel (source/medium)", "SceneFunnel"])
@@ -508,13 +520,11 @@ if uploaded_file is not None:
                     "Ad Channel (source/medium)": channel_order,
                     "SceneFunnel": scene_funnel_order
                 },
-                # ✅ 显式颜色序列 + 稳定离线展示
                 color_discrete_sequence=px.colors.qualitative.Set2,
                 title="Funnel Share within Each Paid Channel (Revenue - Rescaled) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
             )
 
-            # ✅ hover 用 fullData.name，避免出现 '-'（legendgroup 可能为空）
             fig6.update_traces(
                 texttemplate="%{y:.0%}<br>%{customdata[0]:,.0f}",
                 textposition="inside",
@@ -556,7 +566,6 @@ if uploaded_file is not None:
                 .tolist()
             )
 
-            # ✅ 导出用表（含占比+订单数）
             cf2_export = cf2.copy()
             cf2_export["Share %"] = (cf2_export["Share"] * 100).round(2)
             cf2_export = cf2_export.sort_values(["Ad Channel (source/medium)", "SceneFunnel"])
@@ -570,7 +579,6 @@ if uploaded_file is not None:
                     "Ad Channel (source/medium)": channel_order2,
                     "SceneFunnel": scene_funnel_order
                 },
-                # ✅ 显式颜色序列 + 稳定离线展示
                 color_discrete_sequence=px.colors.qualitative.Set2,
                 title="Funnel Share within Each Paid Channel (Purchase) (Scene + Funnel)",
                 custom_data=["Value", "Channel Total"]
@@ -608,13 +616,11 @@ if uploaded_file is not None:
 
             with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
 
-                # 1) 数据表
                 if not cf_export.empty:
                     z.writestr(f"channel_scene_funnel_revenue_table_{ts}.csv", df_to_csv_bytes(cf_export))
                 if not cf2_export.empty:
                     z.writestr(f"channel_scene_funnel_purchase_table_{ts}.csv", df_to_csv_bytes(cf2_export))
 
-                # 2) 图本身（优先 PNG，否则 HTML）
                 if fig6 is not None:
                     png_bytes = safe_fig_to_png_bytes(fig6, scale=2)
                     if png_bytes is not None:
@@ -629,7 +635,6 @@ if uploaded_file is not None:
                     else:
                         z.writestr(f"channel_scene_funnel_purchase_chart_{ts}.html", fig_to_html_bytes(fig6b))
 
-                # 3) 简短说明
                 readme = (
                     "This package includes:\n"
                     "1) *_revenue_table_*.csv: Value (Revenue), Share, Share %, Channel Total\n"
